@@ -34,6 +34,8 @@ export interface Capsule {
   search_text: string;
   /** SHA-256 of normalized capsule content (dedup). */
   content_hash: string;
+  /** Optional JPEG data-URL thumbnail captured at save time. */
+  screenshot?: string;
 }
 
 /** User settings persisted in chrome.storage.local. */
@@ -44,6 +46,8 @@ export interface MeemorySettings {
   autoPaste: boolean;
   /** When true, the floating "Load Memory" button is shown on chat pages. */
   showFloatingButton: boolean;
+  /** Extra hostnames treated as AI chat sites (e.g. ["qwen.ai"]). */
+  customDomains: string[];
 }
 
 /** Input shape accepted by {@link saveCapsule} (server fills defaults). */
@@ -60,6 +64,7 @@ export const DEFAULT_SETTINGS: MeemorySettings = {
   geminiKey: '',
   autoPaste: false,
   showFloatingButton: true,
+  customDomains: [],
 };
 
 let dbPromise: Promise<IDBDatabase> | null = null;

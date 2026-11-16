@@ -70,6 +70,24 @@ interface SaveChatPayload {
 const TOKEN_CAP_CHARS = 3200;
 
 /**
+ * Captures a JPEG thumbnail of the active tab via chrome.tabs.captureVisibleTab.
+ * @returns {Promise<string | undefined>} data-URL or undefined on failure.
+ */
+async function captureScreenshot(): Promise<string | undefined> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.windowId == null) return undefined;
+    return await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: 'jpeg',
+      quality: 50,
+    });
+  } catch (err) {
+    console.warn('[MEEMORY] captureVisibleTab failed:', err);
+    return undefined;
+  }
+}
+
+/**
  * Runs the extraction pipeline and stores (or refreshes) a capsule.
  * @param payload - platform + messages + raw text from the content script.
  * @returns {Promise<{ ok: boolean; capsule?: Capsule; reason?: string }>}
@@ -121,6 +139,7 @@ async function handleSaveChat(
   void TOKEN_CAP_CHARS;
 
   // Step 6 — dedup: same hash within 24h → update in place.
+  const screenshot = await captureScreenshot();
   const dup = await findDuplicate(contentHash);
   if (dup) {
     const updated: Capsule = {
@@ -132,6 +151,7 @@ async function handleSaveChat(
       raw_excerpt: rawText.slice(0, 1500),
       search_text: buildSearchText(dup.name, capsuleText, platform),
       content_hash: contentHash,
+      ...(screenshot ? { screenshot } : {}),
     };
     await saveCapsule(updated);
     return { ok: true, capsule: updated };
@@ -155,6 +175,7 @@ async function handleSaveChat(
     raw_excerpt: rawText.slice(0, 1500),
     search_text: buildSearchText(finalName, capsuleText, platform),
     content_hash: contentHash,
+    ...(screenshot ? { screenshot } : {}),
   };
   const stored = await saveCapsule(record);
   return { ok: true, capsule: stored };

@@ -781,3 +781,35 @@ body {
   background: var(--glass-2);
   box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.25), 0 4px 14px rgba(124, 58, 237, 0.15);
 }
+
+/* ---------- screenshot thumbnails ---------- */
+.pp-thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+.pp-detail-shot {
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  margin-bottom: 10px;
+  display: block;
+}
+.pp-detail-shot[hidden] { display: none; }
+
+/* ---------- Send to AI button (web sources) ---------- */
+.mm-btn-send {
+  background: linear-gradient(135deg, #0e7490, #4f46e5);
+  box-shadow: 0 4px 16px rgba(14, 116, 144, 0.45);
+}
+.mm-btn-send:hover {
+  box-shadow: 0 6px 22px rgba(79, 70, 229, 0.5);
+}
+.mm-item[draggable="true"] { cursor: grab; }
+.mm-item[draggable="true"]:active { cursor: grabbing; }

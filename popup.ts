@@ -293,6 +293,14 @@ function renderDetail(): void {
     `<span class="pp-badge ${c.quality}">${QUALITY_BADGE[c.quality]} ${c.quality}</span>` +
     `<span>${esc(c.platform)}</span><span>·</span><span>~${c.token_estimate} tok${warn}</span>` +
     `<span>·</span><span>${dateLabel(c.created_at)}</span>`;
+  const shot = document.getElementById('detailShot') as HTMLImageElement;
+  if (c.screenshot) {
+    shot.src = c.screenshot;
+    shot.hidden = false;
+  } else {
+    shot.hidden = true;
+    shot.removeAttribute('src');
+  }
   const preview = document.getElementById('detailPreview')!;
   preview.textContent = c.capsule.length > 1200 ? c.capsule.slice(0, 1200) + '\n…' : c.capsule;
 }
@@ -330,14 +338,26 @@ function render(): void {
     const row = document.createElement('div');
     row.className = 'pp-item' + (c.id === selectedId ? ' selected' : '');
     row.style.cursor = 'pointer';
-    row.title = 'Click to preview & paste';
+    row.title = 'Click to preview & paste — or drag onto a chat input';
+    row.draggable = true;
+    row.addEventListener('dragstart', (e) => {
+      const dt = (e as DragEvent).dataTransfer;
+      if (!dt) return;
+      dt.setData('application/x-meemory-capsule', JSON.stringify(c));
+      dt.setData('text/plain', c.capsule);
+      dt.effectAllowed = 'copy';
+    });
     row.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).closest('.mm-del')) return;
       selectedId = c.id === selectedId ? null : c.id;
       render();
     });
     const warn = c.token_estimate > 800 ? ' <span class="pp-warn">⚠ &gt;800 tok</span>' : '';
+    const thumb = c.screenshot
+      ? `<img class="pp-thumb" src="${esc(c.screenshot)}" alt="" draggable="false" />`
+      : '';
     row.innerHTML = `
+      ${thumb}
       <div class="pp-item-info">
         <div class="pp-item-name">${esc(c.name)}</div>
         <div class="pp-item-meta">
@@ -371,6 +391,8 @@ function render(): void {
 function fillSettings(): void {
   if (!settings) return;
   (document.getElementById('geminiKey') as HTMLInputElement).value = settings.geminiKey;
+  (document.getElementById('customDomains') as HTMLInputElement).value =
+    (settings.customDomains ?? []).join(', ');
   (document.getElementById('autoPaste') as HTMLInputElement).checked = settings.autoPaste;
   (document.getElementById('showFloating') as HTMLInputElement).checked = settings.showFloatingButton;
 }
@@ -521,6 +543,10 @@ function bind(): void {
     setLoading(btn, true);
     const patch: Partial<MeemorySettings> = {
       geminiKey: (document.getElementById('geminiKey') as HTMLInputElement).value.trim(),
+      customDomains: (document.getElementById('customDomains') as HTMLInputElement).value
+        .split(',')
+        .map((d) => d.trim().toLowerCase())
+        .filter(Boolean),
       autoPaste: (document.getElementById('autoPaste') as HTMLInputElement).checked,
       showFloatingButton: (document.getElementById('showFloating') as HTMLInputElement).checked,
     };

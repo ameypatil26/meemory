@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Your AI conversations finally remember each other.",
   "permissions": ["storage", "activeTab", "tabs", "scripting"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

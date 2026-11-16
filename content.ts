@@ -6,13 +6,14 @@
  * - Handles Paste → UPDATE_ACCESS → injector.insertIntoChat (never sends).
  * - Handles TRIGGER_CAPTURE (Ctrl/Cmd+Shift+M) → extractor → SAVE_CHAT.
  */
-import { detectPlatform, extractConversation } from './extractor';
+import { detectPlatform, extractConversation, type Conversation } from './extractor';
 import { insertIntoChat } from './injector';
 import { buildInjectionText } from './codeState';
 import type { Capsule, MeemorySettings } from './storage';
 import cssText from './styles.css';
 
 const HOST_ID = 'meemory-root';
+const CAPSULE_MIME = 'application/x-meemory-capsule';
 const QUALITY_BADGE: Record<Capsule['quality'], string> = {
   logic: '⚡',
   gemini: '🤖',
@@ -37,6 +38,7 @@ let host: HTMLDivElement | null = null;
 let shadow: ShadowRoot | null = null;
 let platform: string | null = null;
 let settings: MeemorySettings | null = null;
+let customDomains: string[] = [];
 let panelOpen = false;
 let capsulesCache: Capsule[] = [];
 
@@ -60,7 +62,7 @@ function ensureUI(): void {
   if (host) return;
   // Remove a stale host left by a previous (possibly orphaned) injection.
   document.getElementById(HOST_ID)?.remove();
-  platform = detectPlatform(location.href, document);
+  platform = detectPlatform(location.href, document, customDomains);
   if (!platform) return;
 
   host = document.createElement('div');
@@ -89,6 +91,14 @@ function ensureUI(): void {
   cap.title = 'Capture this conversation (Ctrl/Cmd+Shift+M)';
   cap.addEventListener('click', () => void captureChat());
   wrap.appendChild(cap);
+
+  // "Send to AI" — only meaningful on web sources (Gmail, WhatsApp).
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'mm-btn mm-btn-send';
+  sendBtn.textContent = '🤖 Send to AI';
+  sendBtn.title = 'Capture this page as a memory capsule for an AI chat';
+  sendBtn.addEventListener('click', () => void captureChat());
+  wrap.appendChild(sendBtn);
 
   // Panel
   const panel = document.createElement('div');
@@ -120,6 +130,12 @@ async function refreshVisibility(): Promise<void> {
     if (!host || !shadow) return;
     const s = await send<SettingsResponse>({ type: 'GET_SETTINGS' });
     settings = s.settings ?? null;
+    customDomains = settings?.customDomains ?? [];
+    // Retry detection — a custom domain may have been added since load.
+    if (!platform) {
+      platform = detectPlatform(location.href, document, customDomains);
+      if (platform) ensureUI();
+    }
     if (!settings?.showFloatingButton || !platform) {
       host.style.display = 'none';
       return;
@@ -129,6 +145,12 @@ async function refreshVisibility(): Promise<void> {
     // "Load Memory" appears only when capsules exist; "Save chat" always shows.
     const loadBtn = shadow.querySelector('.mm-btn') as HTMLElement | null;
     if (loadBtn) loadBtn.style.display = capsulesCache.length > 0 || panelOpen ? '' : 'none';
+    // "Send to AI" only on web sources (Gmail, WhatsApp, …).
+    const sendBtn = shadow.querySelector('.mm-btn-send') as HTMLElement | null;
+    if (sendBtn) {
+      sendBtn.style.display =
+        platform === 'gmail' || platform === 'whatsapp' ? '' : 'none';
+    }
     host.style.display = 'block';
   } catch (err) {
     console.error('[MEEMORY] refreshVisibility failed:', err);
@@ -183,6 +205,16 @@ function renderList(filter: string): void {
   for (const c of items) {
     const row = document.createElement('div');
     row.className = 'mm-item';
+    // Draggable capsule → drop onto the chat input to inject.
+    row.draggable = true;
+    row.title = 'Drag onto the chat input, or click Paste';
+    row.addEventListener('dragstart', (e) => {
+      const dt = (e as DragEvent).dataTransfer;
+      if (!dt) return;
+      dt.setData(CAPSULE_MIME, JSON.stringify(c));
+      dt.setData('text/plain', c.capsule);
+      dt.effectAllowed = 'copy';
+    });
 
     const info = document.createElement('div');
     info.className = 'mm-item-info';
@@ -278,7 +310,19 @@ async function captureChat(silent = false): Promise<CaptureResult> {
   console.log('[MEEMORY] captureChat triggered');
   const say = (m: string) => { if (!silent) toast(m); };
   try {
-    const convo = extractConversation(document);
+    // Message-level capture: a user text selection wins over full extraction.
+    const selText = window.getSelection()?.toString().trim() ?? '';
+    let convo: Conversation | null;
+    if (selText.length >= 20) {
+      convo = {
+        platform: platform ?? 'selection',
+        messages: [{ role: 'user', text: selText.slice(0, 15000) }],
+        rawText: `user: ${selText}`.slice(0, 15000),
+      };
+      console.log('[MEEMORY] capturing highlighted selection');
+    } else {
+      convo = extractConversation(document, customDomains);
+    }
     if (!convo) {
       console.warn('[MEEMORY] no conversation detected on this page');
       say('No conversation detected on this page.');
@@ -347,8 +391,15 @@ async function captureChat(silent = false): Promise<CaptureResult> {
     if (area === 'local') void refreshVisibility();
   });
 
-  // Boot
+  // Boot — load settings first so custom domains are known at detection time.
   void (async () => {
+    try {
+      const s = await send<SettingsResponse>({ type: 'GET_SETTINGS' });
+      settings = s.settings ?? null;
+      customDomains = settings?.customDomains ?? [];
+    } catch (err) {
+      console.warn('[MEEMORY] settings preload failed:', err);
+    }
     try {
       ensureUI();
       if (!host) {
@@ -366,4 +417,39 @@ async function captureChat(silent = false): Promise<CaptureResult> {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void refreshVisibility();
   });
+
+  // ---- Drag & drop injection: capsule dragged onto the chat input ----
+  document.addEventListener(
+    'dragover',
+    (e) => {
+      const dt = (e as DragEvent).dataTransfer;
+      if (dt?.types.includes(CAPSULE_MIME)) {
+        e.preventDefault();
+        dt.dropEffect = 'copy';
+      }
+    },
+    true,
+  );
+  document.addEventListener(
+    'drop',
+    (e) => {
+      const dt = (e as DragEvent).dataTransfer;
+      const raw = dt?.getData(CAPSULE_MIME);
+      if (!raw) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        const c = JSON.parse(raw) as Capsule;
+        void send({ type: 'UPDATE_ACCESS', payload: { id: c.id } }).catch(() => {});
+        void insertIntoChat(buildInjectionText(c.capsule)).then((res) => {
+          if (res.via === 'input') toast('Memory dropped into chat — press send.');
+          else if (res.via === 'clipboard') toast('Capsule copied — paste with Ctrl+V.');
+          else toast('Drop failed — could not inject.');
+        });
+      } catch (err) {
+        console.error('[MEEMORY] drop parse failed:', err);
+      }
+    },
+    true,
+  );
 }

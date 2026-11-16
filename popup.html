@@ -50,6 +50,7 @@
       <button id="detailClose" class="mm-del" title="Close">×</button>
     </div>
     <div class="pp-detail-meta" id="detailMeta"></div>
+    <img id="detailShot" class="pp-detail-shot" hidden alt="Captured page" />
     <pre class="pp-preview" id="detailPreview"></pre>
     <button id="pasteBtn" class="pp-btn pp-btn-primary pp-paste-btn" type="button">
       <span class="pp-spin"></span><span class="pp-btn-label">⬆ Paste to Current Chat</span>
@@ -74,6 +75,10 @@
       <label class="pp-field">
         <span>Gemini API key (optional fallback)</span>
         <input id="geminiKey" type="password" placeholder="AIza…" autocomplete="off" />
+      </label>
+      <label class="pp-field">
+        <span>Custom AI domains (comma-separated)</span>
+        <input id="customDomains" type="text" placeholder="qwen.ai, chat.example.com" autocomplete="off" />
       </label>
       <label class="pp-check">
         <input id="autoPaste" type="checkbox" />

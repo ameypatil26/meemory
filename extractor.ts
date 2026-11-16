@@ -92,6 +92,23 @@ const GENERIC_SELECTORS = ['[class*="message"]', '[role="log"]', '[role="article
 const CHAT_INPUT_SELECTOR = 'textarea, [contenteditable="true"], div[contenteditable]';
 
 /**
+ * Non-AI web sources that can still be captured as memories ("Send to AI").
+ * Each maps a hostname to the selector holding the visible conversation.
+ */
+const WEB_SOURCES: { id: string; hosts: string[]; selectors: string[] }[] = [
+  {
+    id: 'gmail',
+    hosts: ['mail.google.com'],
+    selectors: ['[role="main"]', 'div[role="main"]'],
+  },
+  {
+    id: 'whatsapp',
+    hosts: ['web.whatsapp.com'],
+    selectors: ['#main', '[data-testid="conversation-panel"]'],
+  },
+];
+
+/**
  * Detects a substantial chat-style input: a textarea with ≥2 rows or ≥40px
  * height, or a contenteditable of similar size. Filters out tiny inputs.
  * @param doc - document to probe.
@@ -125,7 +142,11 @@ function hasChatInput(doc: Document): boolean {
  * @param doc - document to probe.
  * @returns {string | null} platform id, or null when nothing chat-like is found.
  */
-export function detectPlatform(url: string, doc: Document = document): string | null {
+export function detectPlatform(
+  url: string,
+  doc: Document = document,
+  customDomains: string[] = [],
+): string | null {
   let host = '';
   try {
     host = new URL(url).hostname.toLowerCase();
@@ -147,6 +168,18 @@ export function detectPlatform(url: string, doc: Document = document): string | 
     if (p.id === 'copilot' && host.includes('bing.com') && !path.includes('chat')) continue;
     if (p.id === 'grok' && host === 'x.com' && !path.includes('/grok')) continue;
     return p.id;
+  }
+
+  // User-configured custom AI domains.
+  for (const raw of customDomains) {
+    const d = raw.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!d) continue;
+    if (host === d || host.endsWith('.' + d) || d.endsWith('.' + host)) return 'custom';
+  }
+
+  // Non-AI web sources with a "Send to AI" capture flow (Gmail, WhatsApp…).
+  for (const src of WEB_SOURCES) {
+    if (src.hosts.some((h) => host === h || host.endsWith('.' + h))) return src.id;
   }
 
   // Generic detection: any page exposing message-like containers.
@@ -243,12 +276,44 @@ function isUserMessage(el: Element, spec: PlatformSpec | null): boolean {
 /**
  * Extracts the full conversation from the current document.
  * @param doc - document to scan (defaults to the live document).
+ * @param customDomains - user-configured extra AI hostnames.
  * @returns {Conversation | null} conversation or null when nothing is found.
  */
-export function extractConversation(doc: Document = document): Conversation | null {
+export function extractConversation(
+  doc: Document = document,
+  customDomains: string[] = [],
+): Conversation | null {
   const url = doc.location?.href ?? '';
-  const platform = detectPlatform(url, doc);
+  const platform = detectPlatform(url, doc, customDomains);
   if (!platform) return null;
+
+  // Web sources (Gmail, WhatsApp): scrape the visible thread/email directly.
+  const source = WEB_SOURCES.find((s) => s.id === platform);
+  if (source) {
+    for (const sel of source.selectors) {
+      const el = doc.querySelector(sel) as HTMLElement | null;
+      const text = (el?.innerText || '').trim();
+      if (text.length >= 20) {
+        const clipped = text.slice(0, MAX_RAW);
+        return {
+          platform,
+          messages: [{ role: 'user', text: clipped }],
+          rawText: `Captured from ${platform}:\n\n${clipped}`,
+        };
+      }
+    }
+    // No thread open — still capture page text so *something* is stored.
+    const body = (doc.body?.innerText ?? '').trim();
+    if (body.length >= 20) {
+      const clipped = body.slice(0, MAX_RAW);
+      return {
+        platform,
+        messages: [{ role: 'user', text: clipped }],
+        rawText: `Captured from ${platform}:\n\n${clipped}`,
+      };
+    }
+    return null;
+  }
 
   const spec = PLATFORMS.find((p) => p.id === platform) ?? null;
   let elements = collectElements(doc, spec);
