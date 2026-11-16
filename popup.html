@@ -7,50 +7,91 @@
 </head>
 <body>
   <header class="pp-head">
-    <h1>MEEMORY</h1>
-    <span class="pp-tag">Your AI conversations finally remember each other.</span>
+    <div class="pp-logo">🧠</div>
+    <div>
+      <div class="pp-title">MEEMORY</div>
+      <span class="pp-tag">Your AI conversations finally remember each other.</span>
+    </div>
+    <span class="pp-count" id="count">0</span>
   </header>
 
-  <div class="pp-toolbar">
-    <input id="search" type="search" placeholder="Search name / platform / quality…" />
-    <select id="platformFilter">
-      <option value="">All platforms</option>
-    </select>
-    <select id="qualityFilter">
-      <option value="">All quality</option>
-      <option value="logic">⚡ logic</option>
-      <option value="gemini">🤖 gemini</option>
-      <option value="low">⚠️ low</option>
-    </select>
+  <button id="captureBtn" class="pp-btn pp-btn-capture" type="button">
+    <span class="pp-capture-icon">⚡</span>
+    <span class="pp-btn-label">Capture Current Chat</span>
+    <span class="pp-spin"></span>
+  </button>
+
+  <div id="statusLog" class="pp-log" hidden>
+    <div class="pp-log-title">Status / Error Log</div>
+    <div id="statusLogBody" class="pp-log-body"></div>
+  </div>
+
+  <div class="pp-search">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+      <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+    </svg>
+    <input id="search" type="search" placeholder="Search capsules…" autocomplete="off" />
+  </div>
+
+  <div class="pp-filters">
+    <div class="cx-select" id="platformSelect">
+      <button class="cx-btn" type="button"><span class="cx-label">All platforms</span><span class="cx-caret"></span></button>
+      <div class="cx-menu"></div>
+    </div>
+    <div class="cx-select" id="qualitySelect">
+      <button class="cx-btn" type="button"><span class="cx-label">All quality</span><span class="cx-caret"></span></button>
+      <div class="cx-menu"></div>
+    </div>
+  </div>
+
+  <div id="detail" class="pp-detail" hidden>
+    <div class="pp-detail-head">
+      <div class="pp-detail-title" id="detailName">—</div>
+      <button id="detailClose" class="mm-del" title="Close">×</button>
+    </div>
+    <div class="pp-detail-meta" id="detailMeta"></div>
+    <pre class="pp-preview" id="detailPreview"></pre>
+    <button id="pasteBtn" class="pp-btn pp-btn-primary pp-paste-btn" type="button">
+      <span class="pp-spin"></span><span class="pp-btn-label">⬆ Paste to Current Chat</span>
+    </button>
   </div>
 
   <div id="list" class="pp-list"></div>
 
   <div class="pp-actions">
-    <button id="exportBtn">Export JSON</button>
-    <button id="importBtn">Import JSON</button>
+    <button id="exportBtn" class="pp-btn pp-btn-primary" type="button">
+      <span class="pp-spin"></span><span class="pp-btn-label">⬇ Export JSON</span>
+    </button>
+    <button id="importBtn" class="pp-btn pp-btn-ghost" type="button">
+      <span class="pp-btn-label">⬆ Import JSON</span>
+    </button>
     <input id="importFile" type="file" accept="application/json,.json" hidden />
   </div>
 
   <details class="pp-settings">
     <summary>Settings</summary>
-    <label class="pp-field">
-      <span>Gemini API key (optional fallback)</span>
-      <input id="geminiKey" type="password" placeholder="AIza…" autocomplete="off" />
-    </label>
-    <label class="pp-check">
-      <input id="autoPaste" type="checkbox" />
-      <span>Auto-fill chat input on Paste (never sends)</span>
-    </label>
-    <label class="pp-check">
-      <input id="showFloating" type="checkbox" />
-      <span>Show floating button on chat pages</span>
-    </label>
-    <button id="saveSettings">Save settings</button>
-    <span id="settingsMsg" class="pp-msg"></span>
+    <div class="pp-settings-body">
+      <label class="pp-field">
+        <span>Gemini API key (optional fallback)</span>
+        <input id="geminiKey" type="password" placeholder="AIza…" autocomplete="off" />
+      </label>
+      <label class="pp-check">
+        <input id="autoPaste" type="checkbox" />
+        <span>Auto-fill chat input on Paste (never sends)</span>
+      </label>
+      <label class="pp-check">
+        <input id="showFloating" type="checkbox" />
+        <span>Show floating button on chat pages</span>
+      </label>
+      <button id="saveSettings" class="pp-btn pp-btn-primary" type="button" style="width:100%">
+        <span class="pp-btn-label">Save settings</span>
+      </button>
+      <span id="settingsMsg" class="pp-msg"></span>
+    </div>
   </details>
 
-  <footer class="pp-foot">Ctrl/Cmd+Shift+M captures the current chat.</footer>
+  <footer class="pp-foot">Ctrl/Cmd+Shift+M captures the current chat</footer>
+  <div id="toast" class="pp-toast"></div>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

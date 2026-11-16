@@ -89,6 +89,34 @@ const PLATFORMS: PlatformSpec[] = [
 ];
 
 const GENERIC_SELECTORS = ['[class*="message"]', '[role="log"]', '[role="article"]'];
+const CHAT_INPUT_SELECTOR = 'textarea, [contenteditable="true"], div[contenteditable]';
+
+/**
+ * Detects a substantial chat-style input: a textarea with ≥2 rows or ≥40px
+ * height, or a contenteditable of similar size. Filters out tiny inputs.
+ * @param doc - document to probe.
+ * @returns {boolean} true when a chat-sized input exists.
+ */
+function hasChatInput(doc: Document): boolean {
+  let nodes: NodeListOf<Element>;
+  try {
+    nodes = doc.querySelectorAll(CHAT_INPUT_SELECTOR);
+  } catch {
+    return false;
+  }
+  for (const n of Array.from(nodes)) {
+    const el = n as HTMLElement;
+    if (el.offsetParent === null && el.getClientRects().length === 0) continue;
+    const h = el.offsetHeight || el.getBoundingClientRect().height;
+    if (el.tagName === 'TEXTAREA') {
+      const rows = Number((el as HTMLTextAreaElement).rows) || 1;
+      if (h >= 40 || rows >= 2) return true;
+    } else if (h >= 40) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Detects which AI chat platform the current page belongs to.
@@ -129,7 +157,14 @@ export function detectPlatform(url: string, doc: Document = document): string | 
       return false;
     }
   });
-  return found ? 'generic' : null;
+  if (found) return 'generic';
+
+  // Universal fallback: AI-ish hostnames (.ai / .chat TLDs, chat.* subdomains)
+  // or any page exposing a chat-sized input (textarea / contenteditable).
+  if (/\.(ai|chat)$/.test(host) || host.startsWith('chat.')) return 'generic';
+  if (hasChatInput(doc)) return 'generic';
+
+  return null;
 }
 
 /**
@@ -216,7 +251,10 @@ export function extractConversation(doc: Document = document): Conversation | nu
   if (!platform) return null;
 
   const spec = PLATFORMS.find((p) => p.id === platform) ?? null;
-  const elements = collectElements(doc, spec);
+  let elements = collectElements(doc, spec);
+  // On generic pages, a couple of stray "message"-classed nodes are usually
+  // noise — prefer the full-page text fallback unless we found a real thread.
+  if (!spec && elements.length < 2) elements = [];
 
   const messages: ChatMessage[] = [];
   for (const el of elements) {

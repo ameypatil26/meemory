@@ -371,6 +371,22 @@ export async function makeId(topic: string): Promise<string> {
 }
 
 /**
+ * Builds the exact text injected into a chat input on Paste.
+ * @param capsule - capsule markdown body.
+ * @returns {string} wrapped prefix + capsule + suffix.
+ */
+export function buildInjectionText(capsule: string): string {
+  return (
+    '[MEEMORY CAPSULE — Project State]\n' +
+    'Continue this project from where it left off. Do NOT restart. The state below is current.\n\n' +
+    '---\n' +
+    `${capsule}\n` +
+    '---\n' +
+    'Continue. Do not repeat what is already done. Build on this state.'
+  );
+}
+
+/**
  * Builds the low-quality fallback record body (1500-char excerpt).
  * @param rawText - raw conversation text.
  * @param platform - platform id.

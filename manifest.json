@@ -3,7 +3,7 @@
   "name": "MEEMORY",
   "version": "1.0.0",
   "description": "Your AI conversations finally remember each other.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab", "tabs", "scripting"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

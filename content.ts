@@ -8,6 +8,7 @@
  */
 import { detectPlatform, extractConversation } from './extractor';
 import { insertIntoChat } from './injector';
+import { buildInjectionText } from './codeState';
 import type { Capsule, MeemorySettings } from './storage';
 import cssText from './styles.css';
 
@@ -39,26 +40,26 @@ let settings: MeemorySettings | null = null;
 let panelOpen = false;
 let capsulesCache: Capsule[] = [];
 
-/** Sends a runtime message and awaits the response. */
-function send<T = unknown>(msg: { type: string; payload?: unknown }): Promise<T> {
-  return chrome.runtime.sendMessage(msg) as Promise<T>;
+/** Sends a runtime message and awaits the response; logs + rethrows on failure. */
+async function send<T = unknown>(msg: { type: string; payload?: unknown }): Promise<T> {
+  try {
+    return (await chrome.runtime.sendMessage(msg)) as T;
+  } catch (err) {
+    console.error('[MEEMORY] sendMessage failed for', msg.type, err);
+    throw err;
+  }
 }
 
 /** Builds the text injected into the chat input on Paste. */
 function buildPrefix(capsule: Capsule): string {
-  return (
-    '[MEEMORY CAPSULE — Project State]\n' +
-    'Continue this project from where it left off. Do NOT restart. The state below is current.\n\n' +
-    '---\n' +
-    `${capsule.capsule}\n` +
-    '---\n' +
-    'Continue. Do not repeat what is already done. Build on this state.'
-  );
+  return buildInjectionText(capsule.capsule);
 }
 
-/** Creates the shadow host + UI skeleton once. */
+/** Creates the shadow host + UI skeleton once (replaces any stale host). */
 function ensureUI(): void {
   if (host) return;
+  // Remove a stale host left by a previous (possibly orphaned) injection.
+  document.getElementById(HOST_ID)?.remove();
   platform = detectPlatform(location.href, document);
   if (!platform) return;
 
@@ -114,20 +115,24 @@ function ensureUI(): void {
 
 /** Shows/hides the floating button based on settings + capsule count. */
 async function refreshVisibility(): Promise<void> {
-  ensureUI();
-  if (!host || !shadow) return;
-  const s = await send<SettingsResponse>({ type: 'GET_SETTINGS' });
-  settings = s.settings ?? null;
-  if (!settings?.showFloatingButton || !platform) {
-    host.style.display = 'none';
-    return;
+  try {
+    ensureUI();
+    if (!host || !shadow) return;
+    const s = await send<SettingsResponse>({ type: 'GET_SETTINGS' });
+    settings = s.settings ?? null;
+    if (!settings?.showFloatingButton || !platform) {
+      host.style.display = 'none';
+      return;
+    }
+    const list = await send<ListResponse>({ type: 'LIST_CAPSULES' });
+    capsulesCache = list.capsules ?? [];
+    // "Load Memory" appears only when capsules exist; "Save chat" always shows.
+    const loadBtn = shadow.querySelector('.mm-btn') as HTMLElement | null;
+    if (loadBtn) loadBtn.style.display = capsulesCache.length > 0 || panelOpen ? '' : 'none';
+    host.style.display = 'block';
+  } catch (err) {
+    console.error('[MEEMORY] refreshVisibility failed:', err);
   }
-  const list = await send<ListResponse>({ type: 'LIST_CAPSULES' });
-  capsulesCache = list.capsules ?? [];
-  // "Load Memory" appears only when capsules exist; "Save chat" always shows.
-  const loadBtn = shadow.querySelector('.mm-btn') as HTMLElement | null;
-  if (loadBtn) loadBtn.style.display = capsulesCache.length > 0 || panelOpen ? '' : 'none';
-  host.style.display = 'block';
 }
 
 /** Toggles the capsule panel. */
@@ -139,9 +144,13 @@ function togglePanel(force?: boolean): void {
   panel.style.display = panelOpen ? 'flex' : 'none';
   if (panelOpen) {
     void (async () => {
-      const list = await send<ListResponse>({ type: 'LIST_CAPSULES' });
-      capsulesCache = list.capsules ?? [];
-      renderList('');
+      try {
+        const list = await send<ListResponse>({ type: 'LIST_CAPSULES' });
+        capsulesCache = list.capsules ?? [];
+        renderList('');
+      } catch (err) {
+        console.error('[MEEMORY] panel refresh failed:', err);
+      }
     })();
   }
 }
@@ -200,11 +209,16 @@ function renderList(filter: string): void {
     del.title = 'Delete capsule';
     del.addEventListener('click', () => {
       if (!confirm(`Delete capsule "${c.name}"?`)) return;
-      void send({ type: 'DELETE_CAPSULE', payload: { id: c.id } }).then(() => {
-        capsulesCache = capsulesCache.filter((x) => x.id !== c.id);
-        renderList((shadow!.querySelector('.mm-search') as HTMLInputElement).value);
-        void refreshVisibility();
-      });
+      void send({ type: 'DELETE_CAPSULE', payload: { id: c.id } })
+        .then(() => {
+          capsulesCache = capsulesCache.filter((x) => x.id !== c.id);
+          renderList((shadow!.querySelector('.mm-search') as HTMLInputElement).value);
+          void refreshVisibility();
+        })
+        .catch((err) => {
+          console.error('[MEEMORY] delete failed:', err);
+          toast('Delete failed.');
+        });
     });
     row.appendChild(del);
 
@@ -214,7 +228,11 @@ function renderList(filter: string): void {
 
 /** Paste flow: bump access stats, inject into chat input (never sends). */
 async function pasteCapsule(c: Capsule): Promise<void> {
-  await send({ type: 'UPDATE_ACCESS', payload: { id: c.id } });
+  try {
+    await send({ type: 'UPDATE_ACCESS', payload: { id: c.id } });
+  } catch (err) {
+    console.warn('[MEEMORY] UPDATE_ACCESS failed:', err);
+  }
   const text = buildPrefix(c);
 
   if (settings?.autoPaste) {
@@ -245,43 +263,107 @@ function toast(msg: string): void {
   setTimeout(() => t.remove(), 2900);
 }
 
-/** Capture flow: extract conversation → SAVE_CHAT → toast result. */
-async function captureChat(): Promise<void> {
-  const convo = extractConversation(document);
-  if (!convo) {
-    toast('No conversation detected on this page.');
-    return;
-  }
-  const res = await send<{ ok: boolean; reason?: string; capsule?: Capsule }>({
-    type: 'SAVE_CHAT',
-    payload: { platform: convo.platform, messages: convo.messages, rawText: convo.rawText },
-  });
-  if (res.ok && res.capsule) {
-    toast(`Saved "${res.capsule.name}" (${res.capsule.quality})`);
-    await refreshVisibility();
-  } else {
-    toast(res.reason ?? 'Save failed.');
+/** Result shape returned to whoever triggered a capture. */
+export interface CaptureResult {
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Capture flow: extract conversation → SAVE_CHAT → result.
+ * @param silent - when true, skip the toast (popup shows its own log).
+ * @returns {Promise<CaptureResult>} outcome for the caller.
+ */
+async function captureChat(silent = false): Promise<CaptureResult> {
+  console.log('[MEEMORY] captureChat triggered');
+  const say = (m: string) => { if (!silent) toast(m); };
+  try {
+    const convo = extractConversation(document);
+    if (!convo) {
+      console.warn('[MEEMORY] no conversation detected on this page');
+      say('No conversation detected on this page.');
+      return { success: false, error: 'No chat messages found on page' };
+    }
+    console.log(
+      `[MEEMORY] extracted ${convo.messages.length} messages from ${convo.platform} (${convo.rawText.length} chars)`,
+    );
+    const res = await send<{ ok: boolean; reason?: string; capsule?: Capsule }>({
+      type: 'SAVE_CHAT',
+      payload: { platform: convo.platform, messages: convo.messages, rawText: convo.rawText },
+    });
+    if (res.ok && res.capsule) {
+      say(`Saved "${res.capsule.name}" (${res.capsule.quality})`);
+      await refreshVisibility();
+      return { success: true };
+    }
+    console.warn('[MEEMORY] SAVE_CHAT rejected:', res.reason);
+    say(res.reason ?? 'Save failed.');
+    return { success: false, error: res.reason ?? 'Save failed.' };
+  } catch (err) {
+    console.error('[MEEMORY] captureChat failed:', err);
+    say('Capture failed — see console for details.');
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
-// Boot
-void (async () => {
-  ensureUI();
-  if (!host) return; // not a chat page
-  await refreshVisibility();
-})();
+// Listeners are always registered: if this script was re-executed after an
+// extension reload, the old context's listeners are dead anyway.
+{
+  // Keyboard-shortcut / popup trigger from the service worker.
+  // MUST call sendResponse (and return true) — otherwise the sender's
+  // sendMessage promise rejects with "message channel closed".
+  chrome.runtime.onMessage.addListener(
+    (msg: { type?: string; silent?: boolean }, _sender, sendResponse) => {
+      console.log('[MEEMORY] content script message:', msg?.type);
+      if (msg?.type === 'TRIGGER_CAPTURE') {
+        void (async () => {
+          const result = await captureChat(Boolean(msg.silent));
+          sendResponse(result);
+        })();
+        return true; // keep the message channel open for the async response
+      }
+      if ((msg as { type?: string })?.type === 'PASTE_TEXT') {
+        const text = (msg as { text?: string }).text ?? '';
+        void (async () => {
+          try {
+            const res = await insertIntoChat(text);
+            sendResponse(res);
+          } catch (err) {
+            console.error('[MEEMORY] PASTE_TEXT failed:', err);
+            sendResponse({ ok: false, via: 'none' });
+          }
+        })();
+        return true;
+      }
+      return false;
+    },
+  );
 
-// Re-check when returning to the tab (capsules may have been added elsewhere).
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') void refreshVisibility();
-});
+  // Settings changes (e.g. from popup) update visibility live.
+  chrome.storage.onChanged.addListener((_changes, area) => {
+    if (area === 'local') void refreshVisibility();
+  });
 
-// Keyboard-shortcut trigger from the service worker.
-chrome.runtime.onMessage.addListener((msg: { type?: string }) => {
-  if (msg?.type === 'TRIGGER_CAPTURE') void captureChat();
-});
+  // Boot
+  void (async () => {
+    try {
+      ensureUI();
+      if (!host) {
+        console.log('[MEEMORY] no chat platform detected on', location.hostname);
+        return;
+      }
+      console.log('[MEEMORY] initialized on', platform, location.hostname);
+      await refreshVisibility();
+    } catch (err) {
+      console.error('[MEEMORY] init failed:', err);
+    }
+  })();
 
-// Settings changes (e.g. from popup) update visibility live.
-chrome.storage.onChanged.addListener((_changes, area) => {
-  if (area === 'local') void refreshVisibility();
-});
+  // Re-check when returning to the tab (capsules may have been added elsewhere).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void refreshVisibility();
+  });
+}

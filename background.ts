@@ -9,6 +9,7 @@ import {
   countStructuralSections,
   deriveTopic,
   buildCapsule,
+  buildInjectionText,
   extractCodeState,
   geminiToCapsule,
   lowQualityFallback,
@@ -48,7 +49,10 @@ type MsgType =
   | 'EXPORT_CAPSULES'
   | 'IMPORT_CAPSULES'
   | 'UPDATE_ACCESS'
-  | 'TRIGGER_CAPTURE';
+  | 'TRIGGER_CAPTURE'
+  | 'GET_ACTIVE_TAB'
+  | 'CAPTURE_TAB'
+  | 'PASTE_CAPSULE';
 
 /** Incoming message envelope. */
 interface Msg {
@@ -84,7 +88,7 @@ async function handleSaveChat(
 
   let capsuleText = '';
   let quality: CapsuleQuality = 'low';
-  let usedGemini = false;
+  let geminiTopic = '';
 
   // Step 2+3 — logic-first pass.
   const sections: CodeSections = extractCodeState(rawText);
@@ -97,11 +101,10 @@ async function handleSaveChat(
     // Step 4 — Gemini fallback.
     const data: GeminiData | null = await extractWithGemini(settings.geminiKey, rawText);
     if (data) {
-      const gTopic = (data.topic ?? topic).slice(0, 60);
-      capsuleText = geminiToCapsule(gTopic || name, data);
+      geminiTopic = (data.topic ?? topic).slice(0, 60);
+      capsuleText = geminiToCapsule(geminiTopic || name, data);
       if (capsuleText.trim().length > 0) {
         quality = 'gemini';
-        usedGemini = true;
       }
     }
   }
@@ -134,19 +137,25 @@ async function handleSaveChat(
     return { ok: true, capsule: updated };
   }
 
+  // Naming: sequential "Memory N"; Gemini topics append "(Topic)".
+  const seq = (await listCapsules()).length + 1;
+  const finalName =
+    quality === 'gemini' && geminiTopic
+      ? `Memory ${seq} (${geminiTopic.slice(0, 30)})`
+      : `Memory ${seq}`;
+
   const id = await makeId(topic || name);
   const record: CapsuleInput = {
     id,
-    name: quality === 'low' ? lowQualityFallback(rawText, platform).name : name,
+    name: finalName,
     capsule: capsuleText,
     quality,
     platform,
     token_estimate: tokenEstimate,
     raw_excerpt: rawText.slice(0, 1500),
-    search_text: buildSearchText(name, capsuleText, platform),
+    search_text: buildSearchText(finalName, capsuleText, platform),
     content_hash: contentHash,
   };
-  void usedGemini;
   const stored = await saveCapsule(record);
   return { ok: true, capsule: stored };
 }
@@ -205,10 +214,53 @@ chrome.runtime.onMessage.addListener(
             sendResponse({ ok: true, imported: count, skipped: list.length - valid.length });
             break;
           }
-          case 'TRIGGER_CAPTURE':
-            // Forwarded back to the content script by the caller if needed.
-            sendResponse({ ok: true });
+          case 'GET_ACTIVE_TAB': {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            sendResponse({
+              ok: true,
+              tab: tab
+                ? { id: tab.id ?? null, url: tab.url ?? '', title: tab.title ?? '' }
+                : null,
+            });
             break;
+          }
+          case 'CAPTURE_TAB': {
+            const tabId = (msg.payload as { tabId: number }).tabId;
+            try {
+              const res = (await chrome.tabs.sendMessage(tabId, {
+                type: 'TRIGGER_CAPTURE',
+                silent: true,
+              })) as { success?: boolean; error?: string } | undefined;
+              sendResponse(
+                res ?? { ok: false, success: false, error: 'No response from page content script' },
+              );
+            } catch (err) {
+              sendResponse({
+                ok: false,
+                success: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+            break;
+          }
+          case 'PASTE_CAPSULE': {
+            const p = msg.payload as { tabId: number; capsule: Capsule };
+            const text = buildInjectionText(p.capsule.capsule);
+            try {
+              const res = (await chrome.tabs.sendMessage(p.tabId, {
+                type: 'PASTE_TEXT',
+                text,
+              })) as { ok?: boolean; via?: string } | undefined;
+              sendResponse(res ?? { ok: false, via: 'none', error: 'No response from page' });
+            } catch (err) {
+              sendResponse({
+                ok: false,
+                via: 'none',
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+            break;
+          }
           default:
             sendResponse({ ok: false, reason: `Unknown message type: ${msg.type}` });
         }
@@ -222,15 +274,34 @@ chrome.runtime.onMessage.addListener(
 
 /**
  * Keyboard shortcut: Ctrl/Cmd+Shift+M → ask the active tab to capture.
+ * Retries once (content script may still be initializing) and logs failures
+ * to the service-worker console instead of swallowing them silently.
  */
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== 'capture-chat') return;
+  console.log('[MEEMORY] capture-chat command received');
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id != null) {
-      await chrome.tabs.sendMessage(tab.id, { type: 'TRIGGER_CAPTURE' });
+    if (tab?.id == null) {
+      console.warn('[MEEMORY] no active tab found for capture');
+      return;
     }
-  } catch {
-    /* content script not injected on this page — ignore */
+    const send = () =>
+      chrome.tabs.sendMessage(tab.id!, { type: 'TRIGGER_CAPTURE' }) as Promise<{
+        success?: boolean;
+        error?: string;
+      }>;
+    try {
+      const res = await send();
+      console.log('[MEEMORY] TRIGGER_CAPTURE result for tab', tab.id, res);
+    } catch (firstErr) {
+      // Content script may not be injected yet — retry once after a beat.
+      console.warn('[MEEMORY] first sendMessage failed, retrying:', firstErr);
+      await new Promise((r) => setTimeout(r, 400));
+      const res = await send();
+      console.log('[MEEMORY] TRIGGER_CAPTURE result (retry) for tab', tab.id, res);
+    }
+  } catch (err) {
+    console.error('[MEEMORY] capture shortcut failed:', err);
   }
 });
