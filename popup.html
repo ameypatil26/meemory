@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>MEEMORY</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="pp-head">
+    <h1>MEEMORY</h1>
+    <span class="pp-tag">Your AI conversations finally remember each other.</span>
+  </header>
+
+  <div class="pp-toolbar">
+    <input id="search" type="search" placeholder="Search name / platform / quality…" />
+    <select id="platformFilter">
+      <option value="">All platforms</option>
+    </select>
+    <select id="qualityFilter">
+      <option value="">All quality</option>
+      <option value="logic">⚡ logic</option>
+      <option value="gemini">🤖 gemini</option>
+      <option value="low">⚠️ low</option>
+    </select>
+  </div>
+
+  <div id="list" class="pp-list"></div>
+
+  <div class="pp-actions">
+    <button id="exportBtn">Export JSON</button>
+    <button id="importBtn">Import JSON</button>
+    <input id="importFile" type="file" accept="application/json,.json" hidden />
+  </div>
+
+  <details class="pp-settings">
+    <summary>Settings</summary>
+    <label class="pp-field">
+      <span>Gemini API key (optional fallback)</span>
+      <input id="geminiKey" type="password" placeholder="AIza…" autocomplete="off" />
+    </label>
+    <label class="pp-check">
+      <input id="autoPaste" type="checkbox" />
+      <span>Auto-fill chat input on Paste (never sends)</span>
+    </label>
+    <label class="pp-check">
+      <input id="showFloating" type="checkbox" />
+      <span>Show floating button on chat pages</span>
+    </label>
+    <button id="saveSettings">Save settings</button>
+    <span id="settingsMsg" class="pp-msg"></span>
+  </details>
+
+  <footer class="pp-foot">Ctrl/Cmd+Shift+M captures the current chat.</footer>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

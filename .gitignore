@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output (esbuild bundles emitted next to sources)
+*.js.map
+background.js
+content.js
+popup.js
+
+# Env / secrets
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / tooling
+.vscode/
+.idea/
+*.log
+npm-debug.log*
