@@ -89,19 +89,7 @@ rebuilds).
 - [ ] On a non-AI page (e.g. example.com) → no floating widget.
 - [ ] Gemini key set + capture a vague chat (no code) → 🤖 or ⚠️ quality badge.
 
-## Project layout
 
-See `ARCHITECTURE.md` for the data flow and `AGENT.md` for extension guides.
-
-```
-manifest.json   MV3 manifest (content script, command, popup)
-background.ts   service worker: message router + extraction pipeline
-content.ts      page detection + Shadow DOM widget + capture/paste flows
-extractor.ts    per-host conversation scraping
-codeState.ts    regex extraction, capsule format, hashing
-gemini.ts       optional Gemini fallback
-storage.ts       IndexedDB CRUD + settings
-injector.ts     textarea/contenteditable/clipboard insertion
 popup.html/.ts  management UI
 styles.css      shared styles (popup + shadow DOM)
 ```
