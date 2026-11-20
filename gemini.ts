@@ -6,9 +6,22 @@
  */
 import type { GeminiData } from './codeState';
 
-const MODEL = 'gemini-2.0-flash';
+const MODEL = 'gemini-3.8-flash';
 const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 const TIMEOUT_MS = 20000;
+
+/**
+ * Loose API-key sanity check. Google AI Studio issues keys with `AIza`
+ * (legacy) or `AQ.` (current) prefixes; anything reasonably long is accepted
+ * so future formats aren't rejected.
+ * @param key - candidate API key.
+ * @returns {boolean} true when the key looks usable.
+ */
+export function isPlausibleApiKey(key: string): boolean {
+  const k = key.trim();
+  if (k.startsWith('AIza') || k.startsWith('AQ.')) return k.length >= 20;
+  return k.length >= 30; // unknown future prefix — don't reject on format alone
+}
 
 const PROMPT =
   'Extract the COMPLETE code state from this AI chat. Return ONLY valid JSON: ' +
@@ -35,6 +48,8 @@ function normalizeGemini(raw: unknown): GeminiData {
     classes: strArr(o.classes),
     imports: strArr(o.imports),
     structure: typeof o.structure === 'string' ? o.structure : undefined,
+    chapters: strArr(o.chapters),
+    summary: typeof o.summary === 'string' ? o.summary : undefined,
     decisions: strArr(o.decisions),
     next: strArr(o.next),
   };
@@ -50,7 +65,7 @@ export async function extractWithGemini(
   apiKey: string,
   rawText: string,
 ): Promise<GeminiData | null> {
-  if (!apiKey) return null;
+  if (!apiKey || !isPlausibleApiKey(apiKey)) return null;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);

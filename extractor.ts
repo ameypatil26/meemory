@@ -109,6 +109,61 @@ const WEB_SOURCES: { id: string; hosts: string[]; selectors: string[] }[] = [
 ];
 
 /**
+ * Elements stripped before text extraction — chrome UI, auth prompts,
+ * navigation, and non-content nodes. Matched case-insensitively on
+ * class/id substrings for login/signup/menu/sidebar noise.
+ */
+const NOISE_SELECTOR = [
+  'nav',
+  'header',
+  'footer',
+  'button',
+  'script',
+  'style',
+  'noscript',
+  'svg',
+  'iframe',
+  '[role="navigation"]',
+  '[role="banner"]',
+  '[role="contentinfo"]',
+  '[class*="login" i]',
+  '[id*="login" i]',
+  '[class*="signup" i]',
+  '[id*="signup" i]',
+  '[class*="sign-up" i]',
+  '[id*="sign-up" i]',
+  '[class*="menu" i]',
+  '[id*="menu" i]',
+  '[class*="sidebar" i]',
+  '[id*="sidebar" i]',
+].join(', ');
+
+/**
+ * Clones the page body and strips UI noise. Always operates on a clone —
+ * the live DOM is never mutated.
+ * @param doc - source document.
+ * @returns {HTMLElement} pruned body clone.
+ */
+function cleanedScope(doc: Document): HTMLElement {
+  const clone = doc.body.cloneNode(true) as HTMLElement;
+  for (const el of Array.from(clone.querySelectorAll(NOISE_SELECTOR))) {
+    el.remove();
+  }
+  return clone;
+}
+
+/**
+ * Picks extraction roots inside the cleaned scope: semantic content
+ * containers when present, otherwise the whole scope.
+ * @param scope - pruned body clone.
+ * @returns {ParentNode[]} roots to search for messages/content.
+ */
+function contentRoots(scope: HTMLElement): ParentNode[] {
+  const mains = Array.from(scope.querySelectorAll('main, article, [role="main"]'));
+  return mains.length > 0 ? mains : [scope];
+}
+
+/**
  * Detects a substantial chat-style input: a textarea with ≥2 rows or ≥40px
  * height, or a contenteditable of similar size. Filters out tiny inputs.
  * @param doc - document to probe.
@@ -201,37 +256,40 @@ export function detectPlatform(
 }
 
 /**
- * Collects message elements for a platform spec, deduped and capped.
- * @param doc - document.
+ * Collects message elements for a platform spec across the given roots,
+ * deduped and capped.
+ * @param roots - parent nodes to search (cleaned content roots).
  * @param spec - platform rules (generic spec when platform is "generic").
  * @returns {HTMLElement[]} message elements in DOM order.
  */
-function collectElements(doc: Document, spec: PlatformSpec | null): HTMLElement[] {
+function collectElements(roots: ParentNode[], spec: PlatformSpec | null): HTMLElement[] {
   const selectors = spec ? spec.messageSelectors : GENERIC_SELECTORS;
   const seen = new Set<Element>();
   const out: HTMLElement[] = [];
-  for (const sel of selectors) {
-    let nodes: NodeListOf<Element>;
-    try {
-      nodes = doc.querySelectorAll(sel);
-    } catch {
-      continue;
-    }
-    for (const n of Array.from(nodes)) {
-      if (seen.has(n) || out.length >= MAX_MESSAGES) continue;
-      // Skip elements nested inside an already-collected message.
-      let nested = false;
-      let cur: Element | null = n.parentElement;
-      while (cur) {
-        if (seen.has(cur)) {
-          nested = true;
-          break;
-        }
-        cur = cur.parentElement;
+  for (const root of roots) {
+    for (const sel of selectors) {
+      let nodes: NodeListOf<Element>;
+      try {
+        nodes = root.querySelectorAll(sel);
+      } catch {
+        continue;
       }
-      if (nested) continue;
-      seen.add(n);
-      out.push(n as HTMLElement);
+      for (const n of Array.from(nodes)) {
+        if (seen.has(n) || out.length >= MAX_MESSAGES) continue;
+        // Skip elements nested inside an already-collected message.
+        let nested = false;
+        let cur: Element | null = n.parentElement;
+        while (cur) {
+          if (seen.has(cur)) {
+            nested = true;
+            break;
+          }
+          cur = cur.parentElement;
+        }
+        if (nested) continue;
+        seen.add(n);
+        out.push(n as HTMLElement);
+      }
     }
   }
   return out;
@@ -287,12 +345,17 @@ export function extractConversation(
   const platform = detectPlatform(url, doc, customDomains);
   if (!platform) return null;
 
+  // Prune UI chrome (nav/login/signup/menu/sidebar) on a clone — the live
+  // page is never touched. All text extraction happens inside this scope.
+  const scope = cleanedScope(doc);
+  const roots = contentRoots(scope);
+
   // Web sources (Gmail, WhatsApp): scrape the visible thread/email directly.
   const source = WEB_SOURCES.find((s) => s.id === platform);
   if (source) {
     for (const sel of source.selectors) {
-      const el = doc.querySelector(sel) as HTMLElement | null;
-      const text = (el?.innerText || '').trim();
+      const el = scope.querySelector(sel) as HTMLElement | null;
+      const text = (el?.innerText || el?.textContent || '').trim();
       if (text.length >= 20) {
         const clipped = text.slice(0, MAX_RAW);
         return {
@@ -303,7 +366,7 @@ export function extractConversation(
       }
     }
     // No thread open — still capture page text so *something* is stored.
-    const body = (doc.body?.innerText ?? '').trim();
+    const body = (scope.textContent ?? '').replace(/\s+/g, ' ').trim();
     if (body.length >= 20) {
       const clipped = body.slice(0, MAX_RAW);
       return {
@@ -316,7 +379,11 @@ export function extractConversation(
   }
 
   const spec = PLATFORMS.find((p) => p.id === platform) ?? null;
-  let elements = collectElements(doc, spec);
+  let elements = collectElements(roots, spec);
+  // Message containers may live outside <main> — retry on the full scope.
+  if (elements.length === 0 && roots.length > 1) {
+    elements = collectElements([scope], spec);
+  }
   // On generic pages, a couple of stray "message"-classed nodes are usually
   // noise — prefer the full-page text fallback unless we found a real thread.
   if (!spec && elements.length < 2) elements = [];
@@ -329,8 +396,8 @@ export function extractConversation(
   }
 
   if (messages.length === 0) {
-    // Fallback: whole-page text.
-    const body = (doc.body?.innerText ?? '').trim();
+    // Fallback: cleaned whole-page text (UI chrome already pruned).
+    const body = (scope.textContent ?? '').replace(/\s+/g, ' ').trim();
     if (!body) return null;
     messages.push({ role: 'user', text: body.slice(0, MAX_RAW) });
   } else if (!messages.some((m) => m.role === 'user')) {

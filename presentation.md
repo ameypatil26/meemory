@@ -67,26 +67,39 @@ state* (files, variables, functions, decisions) and injects it into any AI chat.
 
 ### Slide 6 — How MEEMORY Works
 
-- **Capture:** content script detects the chat platform, scrapes messages,
-  sends raw text to the service worker.
-- **Extract:** logic-first regex pass builds structured code state; optional
-  Gemini fallback; low-quality excerpt as last resort.
-- **Store:** SHA-256 dedup, IndexedDB, confidence/access decay-boost.
-- **Inject:** floating Shadow-DOM panel on any chat page → Paste fills the
-  input (never sends).
+- **Detect:** universal platform detection — 7 AI platforms + qwen.ai,
+  `.ai`/`.chat`/`chat.*` hostnames, any page with a chat input, user-defined
+  custom domains, plus Gmail/WhatsApp Web as context sources.
+- **Prune:** DOM is cloned and stripped of nav/login/signup/menu/sidebar UI
+  chrome before scraping — clean text only.
+- **Capture:** full conversation, highlighted selection (message-level), or
+  Send-to-AI thread scrape; every save stores a screenshot thumbnail.
+- **Extract:** logic-first pass (code + chapter headings + prose summary);
+  optional Gemini fallback (`gemini-3.8-flash`); aggressive head+tail
+  truncation as last resort.
+- **Store:** `Memory N` naming, SHA-256 dedup, IndexedDB, newest-first.
+- **Inject:** popup Paste, panel Paste, or drag-and-drop onto the chat input
+  (paste-event path for ProseMirror editors) — never sends.
 
-`[DIAGRAM: workflow — chat page → content.ts → background.ts → codeState.ts →
-storage.ts (IndexedDB) → injector.ts → new chat input]`
+`[DIAGRAM: workflow — chat page → DOM pruning → extractor.ts → background.ts
+→ codeState.ts (+gemini.ts) → screenshot → storage.ts (IndexedDB) →
+injector.ts → new chat input]`
 
 ### Slide 7 — Key Features
 
-- Logic-first extraction (no AI call needed for code chats)
-- Optional Gemini fallback with user-supplied key
-- Capsule format ≤800 tokens, quality badges (⚡ 🤖 ⚠️)
+- **Universal detection** — `.ai`/`.chat` domains, chat-input probing,
+  custom AI domains in settings
+- **Advanced capture** — message-level (highlight-to-save), Gmail/WhatsApp
+  "Send to AI", automated screenshot thumbnails
+- **Clean, token-efficient extraction** — DOM pruning kills UI junk;
+  chapters + prose summaries; fallback keeps only first 1k + last 2k chars
+- Logic-first extraction (no AI call needed for most chats)
+- Optional Gemini fallback (`gemini-3.8-flash`, `AIza`/`AQ.` keys)
+- Capsule format ≤800 tokens, quality badges (⚡ 🤖 ⚠️), `Memory N` naming
 - Hash dedup (24h window) + confidence/access scoring
-- Shadow DOM UI — never breaks host pages
-- Search, filter, delete, JSON export/import
-- Ctrl/Cmd+Shift+M capture shortcut
+- **Drag-and-drop injection** — paste-event path for React/ProseMirror editors
+- Dark-glass popup: live status log, detail view, thumbnails, timestamps
+- Search, filter, delete, JSON export/import; Ctrl/Cmd+Shift+M shortcut
 
 ### Slide 8 — Intended Users
 
@@ -102,7 +115,7 @@ storage.ts (IndexedDB) → injector.ts → new chat input]`
 
 - **Manifest V3** extension, **TypeScript (ESM)**, vanilla DOM
 - **esbuild** bundler, **IndexedDB** storage, `chrome.storage.local` settings
-- Optional **Gemini 2.0 Flash** API (user key)
+- Optional **Gemini 3.8 Flash** API (user key, `AIza`/`AQ.` prefixes)
 - No backend, no accounts, no telemetry
 
 ### Slide 10 — Proposed Timeline / Gantt
@@ -128,10 +141,12 @@ See AGENT.md / README manual test checklist for acceptance criteria.]`
 
 ### Slide 13 — Limitations
 
-- Regex extraction is heuristic — misses state expressed only in prose.
+- Regex/heuristic extraction is approximate — very unstructured prose may
+  still fall back to the truncated excerpt path.
 - Gemini fallback requires a user API key (optional; offline by default).
 - DOM selectors are per-platform and can break when sites redesign.
-- Injection depends on the target chat exposing a textarea/contenteditable.
+- Injection depends on the target chat exposing a textarea/contenteditable
+  (clipboard fallback covers the rest).
 
 ### Slide 14 — Feasibility
 

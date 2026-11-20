@@ -476,6 +476,7 @@ body {
   align-items: flex-end;
   gap: 8px;
   font-family: var(--font);
+  color: #ffffff; /* force light text — host page color can't leak past shadow root inheritance */
 }
 .mm-btn {
   border: none;
@@ -506,10 +507,10 @@ body {
   flex-direction: column;
   width: 360px;
   max-height: 440px;
-  background: rgba(15, 18, 38, 0.92);
+  background: #1a1a2e; /* fully opaque — immune to host page theming */
+  color: #ffffff;
   border: 1px solid rgba(139, 92, 246, 0.3);
   border-radius: 16px;
-  backdrop-filter: blur(16px);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
@@ -595,7 +596,7 @@ body {
 .mm-item-name {
   font-weight: 700;
   font-size: 12px;
-  color: var(--text);
+  color: #ffffff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

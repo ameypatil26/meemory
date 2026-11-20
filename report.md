@@ -124,29 +124,37 @@ platform — without sending data off-device by default.*
 ### 3.3 Workflow / System Architecture
 
 ```
-Chat page (any AI)
-   │  content.ts: detectPlatform() → extractConversation()
+Chat page (any AI / .ai / .chat / chat input / custom domain / Gmail / WhatsApp)
+   │  content.ts: detectPlatform(url, doc, customDomains)
+   │             → cleanedScope() DOM pruning → extractConversation()
+   │             (selection ≥20 chars → message-level capture instead)
    ▼
 chrome.runtime.sendMessage(SAVE_CHAT {platform, messages, rawText})
    │
    ▼
 background.ts service worker — extraction pipeline:
-   1. deriveTopic() + extractCodeState()   (logic pass, regex)
+   1. extractCodeState()   (logic pass: code + chapters + prose summary)
    2. countStructuralSections() ≥ 2 ? buildCapsule() : quality="logic"
    3. else if geminiKey: extractWithGemini() → geminiToCapsule() : "gemini"
-   4. else lowQualityFallback()            : "low" (1500-char excerpt)
-   5. hashContent() (SHA-256 normalized) → findDuplicate() (24h window)
-   6. saveCapsule() → IndexedDB "meemory"/"capsules"
+      (gemini-3.8-flash; AIza/AQ. keys accepted)
+   4. else lowQualityFallback()            : "low"
+      (first 1000 + last 2000 chars — aggressive token reduction)
+   5. naming: "Memory N[: first-5-words | (topic)]"
+   6. chrome.tabs.captureVisibleTab → screenshot thumbnail
+   7. hashContent() (SHA-256 normalized) → findDuplicate() (24h window)
+   8. saveCapsule() → IndexedDB "meemory"/"capsules"
    │
    ▼
-New chat page → floating Shadow-DOM panel (LIST_CAPSULES, sorted by
-confidence*(1+0.05*access_count)) → Paste → UPDATE_ACCESS →
-injector.insertIntoChat() → composer filled → user presses send.
+New chat page → floating Shadow-DOM panel / popup cards (LIST_CAPSULES,
+created_at desc, thumbnails + timestamps) → Paste / drag-and-drop →
+UPDATE_ACCESS → injector.insertIntoChat(text, dropTarget?) →
+composer filled (paste event → execCommand → clipboard) → user presses send.
 ```
 
 Message router types: `SAVE_CHAT`, `LIST_CAPSULES`, `DELETE_CAPSULE`,
 `GET_CAPSULE`, `GET_SETTINGS`, `SET_SETTINGS`, `EXPORT_CAPSULES`,
-`IMPORT_CAPSULES`, `UPDATE_ACCESS`, `TRIGGER_CAPTURE`.
+`IMPORT_CAPSULES`, `UPDATE_ACCESS`, `TRIGGER_CAPTURE`, `GET_ACTIVE_TAB`,
+`CAPTURE_TAB`, `PASTE_CAPSULE`, `PASTE_TEXT`.
 
 ### 3.4 Model Description (System Design)
 
@@ -154,14 +162,16 @@ Message router types: `SAVE_CHAT`, `LIST_CAPSULES`, `DELETE_CAPSULE`,
 
 | Field | Purpose |
 |---|---|
-| `id` | SHA-256(topic+timestamp)[:24] |
-| `name` | topic slug ≤40 chars |
+| `id` | random id |
+| `name` | `Memory N` / `Memory N (Topic)` / `Memory N: <5 words>` |
 | `capsule` | markdown, ≤3200 chars (~800 tokens) |
 | `quality` | `logic` / `gemini` / `low` |
-| `platform`, `token_estimate`, `created_at`, `raw_excerpt` | provenance |
-| `confidence`, `access_count` | decay/boost scoring |
+| `platform` | incl. `generic`, `custom`, `gmail`, `whatsapp`, `selection` |
+| `token_estimate`, `created_at`, `raw_excerpt` | provenance |
+| `confidence`, `access_count` | access-based scoring |
 | `search_text` | lowercase haystack for search |
 | `content_hash` | SHA-256 of normalized capsule (dedup) |
+| `screenshot` | JPEG data-URL thumbnail (captureVisibleTab) |
 
 **Extraction regexes (pinned):**
 
@@ -172,24 +182,54 @@ FUNCTIONS:  /(function\s+(\w+)|(\w+)\s*=\s*(\([^)]*\)\s*=>|function)|(\w+)\s*\([
 CLASSES:    /class\s+(\w+)/g
 IMPORTS:    /(import\s+.*from\s+['"]([^'"]+)['"]|require\(['"]([^'"]+)['"]\))/g
 STRUCTURE:  /[├└]──|^\s*\|--|\/$/m  (per line)
+CHAPTERS:   markdown headings + Chapter|Part|Prologue|Epilogue|Act markers
+SUMMARY:    first 2–3 sentences of the last assistant message (≤400 chars)
 DECISIONS:  sentences containing decided|chose|will use|approach|architecture|instead of|switched to
 NEXT:       sentences containing next|todo|should
 ```
 
-**Capsule gate:** emitted only when ≥2 of {files, variables, functions,
-classes, imports, structure} are non-empty; cap 3200 chars with ordered
-demotion (drop Structure + Next Steps first).
+**DOM pruning:** before extraction the body is cloned and stripped of `nav`,
+`header`, `footer`, `button`, `script`, `style`, `svg`, `iframe`, and any
+element whose class/id contains `login`, `signup`, `sign-up`, `menu`, or
+`sidebar`; text is taken only from `main`/`article`/`[role="main"]` or
+message containers — eliminating UI-chrome pollution on generic pages.
+
+**Platform detection:** hardcoded hosts (7 AI platforms + qwen.ai) → web
+sources (`gmail`, `whatsapp`) → user **custom domains** (exact host or
+subdomain) → generic message-container probe → `.ai`/`.chat`/`chat.*`
+hostname → chat-input probe (any page with a chat-sized textarea/
+contenteditable).
+
+**Capsule gate:** emitted when ≥2 of {files, variables, functions, classes,
+imports, structure, chapters} are non-empty or a summary exists; cap 3200
+chars with ordered demotion (drop Structure + Next Steps first). Prose chats
+thus produce real `logic` capsules rather than raw fallback.
+
+**Ultimate fallback:** first 1000 + last 2000 chars (project setup + most
+recent state) — never the full 15k transcript.
 
 **Dedup:** SHA-256 over lowercased, whitespace-collapsed capsule; identical
 hash within 24h → in-place update preserving `id`/`created_at`/`name`/
 `confidence`/`access_count`.
 
-**Ranking:** `score = confidence * (1 + 0.05 * access_count)` descending.
+**Ranking:** lists sort by `created_at` descending (newest first); each use
+increments `access_count` and `confidence` (+0.05, cap 1.0).
 
-**Injection:** lowest visible `textarea`/`contenteditable`/`[role="textbox"]`;
-textarea → native setter + bubbling `input`/`change`; contenteditable →
-`focus()` + Range select + `execCommand('insertText')`; failure → clipboard +
-toast. Never sends.
+**Injection:** lowest visible `textarea`/`contenteditable`/`[role="textbox"]`
+(or the explicit drop target); textarea → native setter + bubbling
+`input`/`change`; contenteditable → synthetic `ClipboardEvent('paste')` with
+a `DataTransfer` (ProseMirror/React-native path, e.g. Gemini) →
+`execCommand('insertText')` → clipboard + toast. Never sends.
+
+**Drag-and-drop:** popup cards and in-page panel rows are draggable
+(`application/x-meemory-capsule` payload); a capture-phase drop listener in
+`content.ts` injects via the same `insertIntoChat` path — no clipboard.
+
+**UI:** dark-glass popup (400px) with animated capture button, live
+status/error log, capsule detail view, thumbnails, timestamps, custom
+dropdowns, settings (Gemini key, custom domains, auto-paste, floating
+toggle), export/import; opaque `#1a1a2e` Shadow-DOM floating panel immune to
+host theming.
 
 **UI isolation:** all injected DOM lives under one host's ShadowRoot with an
 adopted `<style>` block; popup uses the same stylesheet normally.
@@ -207,16 +247,24 @@ fallback extends coverage to prose-heavy conversations; the injection layer
 handles React-style textareas and contenteditable editors without auto-sending.
 All state resides in IndexedDB — no accounts, no backend, no telemetry — while
 hash dedup, confidence scoring, and access boosting keep the capsule store
-clean and self-improving. The extension builds cleanly (`npm run build`, zero
-errors) and ships with a manual test checklist covering the full
-capture → store → inject loop.
+clean and self-improving. Subsequent revisions added universal detection
+(`.ai`/`.chat`/custom domains/chat-input probing), DOM pruning to eliminate
+UI-chrome pollution, prose-aware extraction (chapter headings + assistant
+summaries), message-level capture, Gmail/WhatsApp "Send to AI" scraping,
+automated screenshot thumbnails, sequential `Memory N` naming, drag-and-drop
+injection with a ProseMirror-compatible paste-event path, and aggressive
+head+tail truncation in the ultimate fallback — keeping injected context
+small enough for real token budgets. The extension builds cleanly
+(`npm run build`, zero errors) and ships with a manual test checklist
+covering the full capture → store → inject loop.
 
 ### 5.2 Future Work
 
 1. **Namespaces & folders** — tag capsules by project (and platform) for
    filtered retrieval; optional versioning per project.
-2. **Richer injection UX** — drag-and-drop capsule transfer between windows,
-   multi-capsule merge, attachment/context bundling.
+2. **Richer injection UX** — multi-capsule merge, attachment/context
+   bundling, cross-window capsule transfer (single-window drag-and-drop is
+   already implemented).
 3. **Selector resilience** — auto-healing selectors, per-site override rules,
    MutationObserver-based re-detection on SPA navigation.
 4. **Alternative extractors** — local LLM via Ollama as a Gemini substitute;

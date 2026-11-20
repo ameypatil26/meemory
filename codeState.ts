@@ -14,6 +14,8 @@ export interface CodeSections {
   classes: string[];
   imports: { module: string; pkg: string }[];
   structure: string[];
+  chapters: string[];
+  summary: string;
   decisions: string[];
   next: string[];
 }
@@ -27,6 +29,8 @@ export interface GeminiData {
   classes?: string[];
   imports?: string[];
   structure?: string;
+  chapters?: string[];
+  summary?: string;
   decisions?: string[];
   next?: string[];
 }
@@ -41,6 +45,8 @@ const RE_CLASS = /class\s+(\w+)/g;
 const RE_IMPORT =
   /(import\s+.*from\s+['"]([^'"]+)['"]|require\(['"]([^'"]+)['"]\))/g;
 const RE_STRUCTURE_LINE = /[├└]──|^\s*\|--|\/$/m;
+// Prose structure: markdown headings and explicit chapter/part markers.
+const RE_CHAPTER_LINE = /^\s*(?:#{1,6}\s+|(?:chapter|part|prologue|epilogue|act)\s+)[^\n]{2,90}$/gim;
 
 const DECISION_WORDS = [
   'decided',
@@ -69,6 +75,8 @@ export function countStructuralSections(s: CodeSections): number {
   if (s.classes.length) n++;
   if (s.imports.length) n++;
   if (s.structure.length) n++;
+  if (s.chapters.length) n++;
+  if (s.summary) n++;
   return n;
 }
 
@@ -115,6 +123,29 @@ function keywordSentences(text: string, keywords: string[], cap: number): string
 }
 
 /**
+ * Extracts the first 2–3 sentences of the LAST assistant-role message in
+ * flattened "role: text" raw conversation. Powers prose summaries + naming.
+ * @param rawText - flattened conversation.
+ * @returns {string} summary sentences ('' when none found).
+ */
+export function lastAssistantSummary(rawText: string): string {
+  const blocks = rawText.split(/\n\n(?=(?:user|assistant):)/);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]!;
+    if (!b.startsWith('assistant:')) continue;
+    const body = b.slice('assistant:'.length).trim();
+    const sentences = body.match(/[^.!?\n]+[.!?]+/g) ?? [body];
+    return sentences
+      .slice(0, 3)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 400);
+  }
+  return '';
+}
+
+/**
  * Runs the full logic-first extraction pass over raw conversation text.
  * @param rawText - flattened conversation ("role: text" blocks).
  * @returns {CodeSections} populated sections (possibly all empty).
@@ -127,6 +158,8 @@ export function extractCodeState(rawText: string): CodeSections {
     classes: [],
     imports: [],
     structure: [],
+    chapters: [],
+    summary: lastAssistantSummary(rawText),
     decisions: [],
     next: [],
   };
@@ -206,6 +239,18 @@ export function extractCodeState(rawText: string): CodeSections {
   }
   sections.structure = structure;
 
+  // CHAPTERS — markdown headings + explicit chapter/part markers.
+  const chapters: string[] = [];
+  const seenCh = new Set<string>();
+  for (const m of rawText.matchAll(RE_CHAPTER_LINE)) {
+    const t = m[0].trim().replace(/^#+\s*/, '').replace(/\s+/g, ' ');
+    if (t.length < 3 || seenCh.has(t.toLowerCase())) continue;
+    seenCh.add(t.toLowerCase());
+    chapters.push(t);
+    if (chapters.length >= MAX_SECTION_ITEMS) break;
+  }
+  sections.chapters = chapters;
+
   // DECISIONS / NEXT — keyword sentences.
   sections.decisions = keywordSentences(rawText, DECISION_WORDS, MAX_SECTION_ITEMS);
   sections.next = keywordSentences(rawText, NEXT_WORDS, MAX_SECTION_ITEMS);
@@ -270,6 +315,7 @@ export function buildSearchText(name: string, capsule: string, platform: string)
 export function buildCapsule(topic: string, s: CodeSections): string {
   const render = (includeTail: boolean): string => {
     const lines: string[] = [`## Project: ${topic || 'Untitled'}`];
+    if (s.summary) lines.push('## Summary', s.summary);
     if (s.files.length) {
       lines.push('## Files');
       for (const f of s.files) lines.push(`- ${f.name}${f.desc ? `: ${f.desc}` : ''}`);
@@ -291,6 +337,10 @@ export function buildCapsule(topic: string, s: CodeSections): string {
     if (s.imports.length) {
       lines.push('## Imports');
       for (const i of s.imports) lines.push(`- \`${i.module}\` from '${i.pkg}'`);
+    }
+    if (s.chapters.length) {
+      lines.push('## Chapters');
+      for (const c of s.chapters) lines.push(`- ${c}`);
     }
     if (includeTail && s.structure.length) {
       lines.push('## Project Structure');
@@ -335,6 +385,8 @@ export function geminiToCapsule(topic: string, data: GeminiData): string {
     classes: (data.classes ?? []).filter(Boolean),
     imports: (data.imports ?? []).map((m) => ({ module: m, pkg: m })),
     structure: data.structure ? data.structure.split('\n').map((l) => l.trim()).filter(Boolean) : [],
+    chapters: data.chapters ?? [],
+    summary: data.summary ?? '',
     decisions: data.decisions ?? [],
     next: data.next ?? [],
   };
@@ -397,8 +449,19 @@ export function lowQualityFallback(rawText: string, platform: string): {
   name: string;
 } {
   const ts = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  // Aggressive token reduction: keep the opening (project setup) and the
+  // tail (most recent state); drop the middle entirely.
+  let body: string;
+  if (rawText.length <= 3000) {
+    body = rawText;
+  } else {
+    body =
+      rawText.slice(0, 1000) +
+      '\n\n…[middle truncated to save tokens]…\n\n' +
+      rawText.slice(-2000);
+  }
   return {
-    capsule: `## Raw excerpt (${platform})\n\n${rawText.slice(0, 1500)}`,
+    capsule: `## Raw excerpt (${platform})\n\n${body}`,
     name: `Untitled chat ${ts}`,
   };
 }

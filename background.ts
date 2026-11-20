@@ -11,6 +11,7 @@ import {
   buildCapsule,
   buildInjectionText,
   extractCodeState,
+  lastAssistantSummary,
   geminiToCapsule,
   lowQualityFallback,
   makeId,
@@ -157,12 +158,24 @@ async function handleSaveChat(
     return { ok: true, capsule: updated };
   }
 
-  // Naming: sequential "Memory N"; Gemini topics append "(Topic)".
+  // Naming: prose chats → "Memory N: <first 5 words of last AI reply>";
+  // Gemini topic → "Memory N (Topic)"; otherwise plain "Memory N".
   const seq = (await listCapsules()).length + 1;
-  const finalName =
-    quality === 'gemini' && geminiTopic
-      ? `Memory ${seq} (${geminiTopic.slice(0, 30)})`
-      : `Memory ${seq}`;
+  const codeArtifacts =
+    sections.files.length +
+    sections.variables.length +
+    sections.functions.length +
+    sections.classes.length +
+    sections.imports.length;
+  const isProse = codeArtifacts === 0;
+  const assistantSummary = lastAssistantSummary(rawText);
+  let finalName = `Memory ${seq}`;
+  if (isProse && assistantSummary) {
+    const five = assistantSummary.trim().split(/\s+/).slice(0, 5).join(' ');
+    if (five) finalName = `Memory ${seq}: ${five}`.slice(0, 80);
+  } else if (quality === 'gemini' && geminiTopic) {
+    finalName = `Memory ${seq} (${geminiTopic.slice(0, 30)})`;
+  }
 
   const id = await makeId(topic || name);
   const record: CapsuleInput = {

@@ -74,13 +74,47 @@ function setNativeTextareaValue(el: HTMLTextAreaElement, text: string): void {
 }
 
 /**
- * Inserts text into a contenteditable element via execCommand.
+ * Dispatches a synthetic ClipboardEvent('paste') carrying the text.
+ * Rich editors (ProseMirror/Lexical/React) handle real paste events through
+ * their own input pipeline — this is the most compatible insertion path.
+ * @param el - focused editable element.
+ * @param text - text to "paste".
+ * @returns {boolean} true when the event was dispatched.
+ */
+function dispatchPasteEvent(el: HTMLElement, text: string): boolean {
+  try {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', text);
+    dt.setData('text/html', `<pre>${text.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</pre>`);
+    const evt = new ClipboardEvent('paste', {
+      clipboardData: dt,
+      bubbles: true,
+      cancelable: true,
+    });
+    el.focus();
+    el.dispatchEvent(evt);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Inserts text into a contenteditable element.
+ * Order: synthetic paste event (editor-native path) → execCommand fallback.
  * @param el - contenteditable element.
  * @param text - text to insert.
  * @returns {boolean} true on success.
  */
 function insertContentEditable(el: HTMLElement, text: string): boolean {
   try {
+    // 1) Paste event — ProseMirror/React editors treat this as a real paste.
+    const before = el.textContent?.length ?? 0;
+    if (dispatchPasteEvent(el, text)) {
+      const after = el.textContent?.length ?? 0;
+      if (after > before + text.length * 0.5) return true; // editor consumed it
+    }
+    // 2) execCommand fallback.
     el.focus();
     const sel = window.getSelection();
     const range = document.createRange();
@@ -125,28 +159,48 @@ export async function copyToClipboard(text: string): Promise<boolean> {
  * Inserts the capsule prefix into the page's chat input.
  * Never sends. Falls back to clipboard when injection fails.
  * @param text - full text to insert (prefix + capsule + suffix).
+ * @param preferred - optional element to inject into (e.g. the drop target).
  * @returns {Promise<InsertResult>} what happened.
  */
-export async function insertIntoChat(text: string): Promise<InsertResult> {
-  const input = findChatInput();
-  if (!input) {
+export async function insertIntoChat(
+  text: string,
+  preferred?: HTMLElement | null,
+): Promise<InsertResult> {
+  let input = preferred ?? null;
+  if (input && !isEditable(input)) input = null;
+  const found = input ? null : findChatInput();
+  const target = input ?? found?.el ?? null;
+  if (!target) {
     const copied = await copyToClipboard(text);
     return { ok: copied, via: copied ? 'clipboard' : 'none' };
   }
+  const kind = target.tagName === 'TEXTAREA' ? 'textarea' : 'contenteditable';
 
-  if (input.kind === 'textarea') {
+  if (kind === 'textarea') {
     try {
-      setNativeTextareaValue(input.el as HTMLTextAreaElement, text);
+      setNativeTextareaValue(target as HTMLTextAreaElement, text);
       return { ok: true, via: 'input' };
     } catch {
       /* fall through */
     }
   } else {
-    if (insertContentEditable(input.el, text)) {
+    if (insertContentEditable(target, text)) {
       return { ok: true, via: 'input' };
     }
   }
 
   const copied = await copyToClipboard(text);
   return { ok: copied, via: copied ? 'clipboard' : 'none' };
+}
+
+/**
+ * Checks whether an element is one of the recognized chat-input types.
+ * @param el - candidate element.
+ * @returns {boolean}
+ */
+function isEditable(el: HTMLElement): boolean {
+  if (el.tagName === 'TEXTAREA') return true;
+  const ce = el.getAttribute('contenteditable');
+  if (ce === 'true' || ce === '') return true;
+  return el.getAttribute('role') === 'textbox' && ce !== 'false';
 }

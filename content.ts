@@ -224,7 +224,13 @@ function renderList(filter: string): void {
     const meta = document.createElement('div');
     meta.className = 'mm-item-meta';
     const warn = c.token_estimate > 800 ? ' ⚠️' : '';
-    meta.textContent = `${c.platform} · ${QUALITY_BADGE[c.quality]} ${QUALITY_LABEL[c.quality]} · ~${c.token_estimate} tok${warn}`;
+    const saved = new Date(c.created_at).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    meta.textContent = `${c.platform} · ${QUALITY_BADGE[c.quality]} ${QUALITY_LABEL[c.quality]} · ~${c.token_estimate} tok${warn} · ${saved}`;
     info.appendChild(title);
     info.appendChild(meta);
     row.appendChild(info);
@@ -440,8 +446,13 @@ async function captureChat(silent = false): Promise<CaptureResult> {
       e.stopPropagation();
       try {
         const c = JSON.parse(raw) as Capsule;
+        // Resolve the actual drop target — editors like Gemini's
+        // ProseMirror input need the event on the element itself.
+        const target = (e.target as Element | null)?.closest?.(
+          'textarea, [contenteditable="true"], div[contenteditable], [role="textbox"]',
+        ) as HTMLElement | null;
         void send({ type: 'UPDATE_ACCESS', payload: { id: c.id } }).catch(() => {});
-        void insertIntoChat(buildInjectionText(c.capsule)).then((res) => {
+        void insertIntoChat(buildInjectionText(c.capsule), target).then((res) => {
           if (res.via === 'input') toast('Memory dropped into chat — press send.');
           else if (res.via === 'clipboard') toast('Capsule copied — paste with Ctrl+V.');
           else toast('Drop failed — could not inject.');

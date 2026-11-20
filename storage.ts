@@ -134,12 +134,12 @@ export async function saveCapsule(capsule: CapsuleInput): Promise<Capsule> {
 }
 
 /**
- * Returns all capsules sorted by boosted confidence (desc), then recency.
+ * Returns all capsules sorted newest-first by created_at.
  * @returns {Promise<Capsule[]>} all stored capsules.
  */
 export async function listCapsules(): Promise<Capsule[]> {
   const all = await tx<Capsule[]>('readonly', (s) => s.getAll() as IDBRequest<Capsule[]>);
-  return (all ?? []).sort((a, b) => score(b) - score(a) || b.created_at - a.created_at);
+  return (all ?? []).sort((a, b) => b.created_at - a.created_at);
 }
 
 /**

@@ -158,14 +158,14 @@ async function captureCurrentChat(): Promise<void> {
   }
 }
 
-/** Relative-ish date label for a capsule. */
+/** Creation timestamp label, e.g. "Nov 16, 12:22 AM". */
 function dateLabel(ts: number): string {
-  const d = new Date(ts);
-  const now = Date.now();
-  const diffH = (now - ts) / 36e5;
-  if (diffH < 24) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (diffH < 24 * 7) return d.toLocaleDateString([], { weekday: 'short' });
-  return d.toLocaleDateString();
+  return new Date(ts).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 // ---------------- custom select ----------------
